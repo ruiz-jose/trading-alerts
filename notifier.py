@@ -77,6 +77,59 @@ def format_message(signal: dict) -> str:
             f"⚠️ Liquidación: `${grid.get('liq_price', 0):,.0f}`\n"
         )
 
+    # Contexto macro 1H
+    ctx = signal.get("context", {})
+    if ctx:
+        _trend_label = {
+            "STRONG_BULL": "Alcista fuerte (precio > EMA50/200)",
+            "RECOVERING":  "Recuperando (precio > EMA50)",
+            "WEAKENING":   "Debilitándose (precio < EMA50)",
+            "STRONG_BEAR": "Bajista fuerte (precio < EMA50/200)",
+            "NEUTRAL":     "Neutral",
+        }
+        trend_txt = _trend_label.get(ctx.get("trend_1h", "NEUTRAL"), "Neutral")
+
+        stoch_k = ctx.get("stoch_k_1h", 50)
+        stoch_d = ctx.get("stoch_d_1h", 50)
+        stoch_flag = ""
+        if ctx.get("stoch_overbought"):
+            stoch_flag = " ⚠️ sobrecompra"
+        elif ctx.get("stoch_oversold"):
+            stoch_flag = " ⚠️ sobreventa"
+
+        obv_map = {"UP": "alcista", "DOWN": "bajista", "NEUTRAL": "neutral"}
+        obv_div_map = {"BULL": "divergencia alcista", "BEAR": "divergencia bajista", "NONE": "sin divergencia"}
+        obv_txt = obv_map.get(ctx.get("obv_trend", "NEUTRAL"), "neutral")
+        obv_div = obv_div_map.get(ctx.get("obv_divergence", "NONE"), "sin divergencia")
+
+        msg += (
+            f"\n📡 *Contexto 1H*\n"
+            f"Tendencia: {trend_txt}\n"
+            f"StochRSI: `K={stoch_k:.0f} D={stoch_d:.0f}`{stoch_flag}\n"
+            f"OBV: `{obv_txt}` ({obv_div})\n"
+        )
+
+        if ctx.get("golden_cross"):
+            msg += "🏆 `Golden Cross EMA50/200` ¡señal alcista macro!\n"
+        elif ctx.get("death_cross"):
+            msg += "💀 `Death Cross EMA50/200` ¡señal bajista macro!\n"
+
+        sup = ctx.get("nearest_support", 0)
+        res = ctx.get("nearest_resistance", 0)
+        if sup and res:
+            msg += (
+                f"Soporte 1H:     `${sup:,.0f}` ({ctx.get('dist_to_support_pct', 0):.2f}% abajo)\n"
+                f"Resistencia 1H: `${res:,.0f}` ({ctx.get('dist_to_resistance_pct', 0):.2f}% arriba)\n"
+            )
+
+        ema50 = ctx.get("ema50", 0)
+        ema200 = ctx.get("ema200", 0)
+        if ema50:
+            msg += f"EMA50 1H: `${ema50:,.0f}`"
+            if ema200:
+                msg += f"  EMA200 1H: `${ema200:,.0f}`"
+            msg += "\n"
+
     # Razones
     reasons = signal.get("reasons", [])
     if reasons:
@@ -137,43 +190,57 @@ def notify(signal: dict) -> bool:
 def format_bmsb_message(signal: dict) -> str:
     """Formatea una alerta de Bull Market Support Band para Telegram."""
     direction = signal["direction"]
-    symbol = signal["symbol"]
-    price = signal["price"]
-    sma20 = signal["sma20"]
-    ema21 = signal["ema21"]
-    dist_sma = signal["dist_sma20_pct"]
-    dist_ema = signal["dist_ema21_pct"]
-    prev_zone = signal.get("prev_zone", "?")
+    symbol    = signal["symbol"]
+    price     = signal["price"]
+    sma20     = signal["sma20"]
+    ema21     = signal["ema21"]
+    dist_sma  = signal["dist_sma20_pct"]
+    dist_ema  = signal["dist_ema21_pct"]
+    prev_raw  = signal.get("prev_zone", "UNKNOWN")
+
+    # Etiqueta legible para la zona anterior
+    if prev_raw in ("UNKNOWN", "?", None, ""):
+        prev_label = "Sin historial previo"
+        is_first   = True
+    else:
+        prev_label = prev_raw
+        is_first   = False
 
     if direction == "BULL":
-        emoji = "🟢"
-        titulo = "CRUCE ALCISTA — Mercado Bull"
-        desc = "El precio superó ambas bandas semanales ✅\nConfirmación de tendencia alcista macro."
-        rel_sma = f"+{dist_sma:.2f}%" if dist_sma >= 0 else f"{dist_sma:.2f}%"
-        rel_ema = f"+{dist_ema:.2f}%" if dist_ema >= 0 else f"{dist_ema:.2f}%"
+        emoji     = "🟢"
+        headline  = "Mercado ALCISTA confirmado"
+        detail    = "El precio superó ambas bandas semanales.\nContexto macro: favorable para compras."
+        dist_sma_txt = f"+{dist_sma:.1f}% sobre la banda"
+        dist_ema_txt = f"+{dist_ema:.1f}% sobre la banda"
     else:
-        emoji = "🔴"
-        titulo = "CRUCE BAJISTA — Alerta Macro"
-        desc = "El precio cayó por debajo de ambas bandas semanales ⚠️\nSeñal de debilidad macro."
-        rel_sma = f"{dist_sma:.2f}%"
-        rel_ema = f"{dist_ema:.2f}%"
+        emoji     = "🔴"
+        headline  = "Mercado BAJISTA confirmado"
+        detail    = "El precio cayó bajo ambas bandas semanales.\nContexto macro: precaución, evitar compras."
+        dist_sma_txt = f"{dist_sma:.1f}% bajo la banda"
+        dist_ema_txt = f"{dist_ema:.1f}% bajo la banda"
 
-    ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    zone_line = (
+        f"_Primera detección desde que arrancó el bot_"
+        if is_first else
+        f"Cambio: `{prev_label}` → *{direction}*"
+    )
+
+    ts = datetime.now(timezone.utc).strftime("%d/%m/%Y %H:%M UTC")
 
     msg = (
-        f"{emoji} *{symbol} — Bull Market Support Band*\n"
+        f"{emoji} *{symbol}*\n"
+        f"*Banda de Soporte Semanal (BMSB)*\n"
         f"\n"
-        f"📊 *{titulo}*\n"
-        f"{desc}\n"
+        f"*{headline}*\n"
+        f"{detail}\n"
         f"\n"
-        f"💰 Precio actual: `${price:,.2f}`\n"
-        f"📈 SMA 20W:       `${sma20:,.2f}` ({rel_sma})\n"
-        f"📉 EMA 21W:       `${ema21:,.2f}` ({rel_ema})\n"
+        f"💰 Precio:  `${price:,.2f}`\n"
+        f"📈 SMA 20W: `${sma20:,.2f}`  _({dist_sma_txt})_\n"
+        f"📉 EMA 21W: `${ema21:,.2f}`  _({dist_ema_txt})_\n"
         f"\n"
-        f"↩️ Zona anterior: `{prev_zone}`  →  Zona actual: `{direction}`\n"
+        f"🔄 {zone_line}\n"
         f"\n"
-        f"⏱ Timeframe: *Semanal (1W)*\n"
-        f"🕐 _{ts}_"
+        f"⏱ _Semanal (1W) · {ts}_"
     )
     return msg
 

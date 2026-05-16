@@ -266,6 +266,119 @@ def evaluate(symbol: str, ind: dict) -> dict | None:
             short_score += 2
             reasons_short.append(f"⚡ Volatilidad expandiendo 5m ({label})")
 
+    # ===== 8. EMA 50/200 EN 1H (bias de tendencia macro) =====
+    ema_ext = ind.get("ema_ext_1h", {"trend": "NEUTRAL", "above_50": True, "above_200": True,
+                                      "golden_cross": False, "death_cross": False,
+                                      "ema50": 0, "ema200": 0})
+    trend_1h = ema_ext.get("trend", "NEUTRAL")
+
+    if trend_1h == "STRONG_BULL":
+        long_score += 2
+        total_signals += 1
+        reasons_long.append("EMA 50/200 tendencia alcista 1h")
+    elif trend_1h == "STRONG_BEAR":
+        short_score += 2
+        total_signals += 1
+        reasons_short.append("EMA 50/200 tendencia bajista 1h")
+    elif trend_1h == "RECOVERING":
+        long_score += 1
+        total_signals += 1
+        reasons_long.append("Precio recuperando sobre EMA50 1h")
+    elif trend_1h == "WEAKENING":
+        short_score += 1
+        total_signals += 1
+        reasons_short.append("Precio debilitándose bajo EMA50 1h")
+
+    if ema_ext.get("golden_cross"):
+        long_score += 3
+        total_signals += 1
+        reasons_long.append("🏆 Golden Cross EMA50/200 en 1h")
+    elif ema_ext.get("death_cross"):
+        short_score += 3
+        total_signals += 1
+        reasons_short.append("💀 Death Cross EMA50/200 en 1h")
+
+    # Filtro de tendencia contraria: señal contra la tendencia 1h pierde peso
+    if trend_1h == "STRONG_BEAR" and long_score > short_score:
+        long_score = max(0, long_score - 2)
+    elif trend_1h == "STRONG_BULL" and short_score > long_score:
+        short_score = max(0, short_score - 2)
+
+    # ===== 9. STOCHASTIC RSI 1H (confirmación y filtro de sobrecompra/venta) =====
+    stoch_1h = ind.get("stoch_rsi_1h", {"k": 50, "d": 50, "overbought": False,
+                                          "oversold": False, "cross_up": False, "cross_dn": False})
+    stoch_5m = ind.get("stoch_rsi_5m", {"k": 50, "d": 50, "overbought": False,
+                                          "oversold": False, "cross_up": False, "cross_dn": False})
+
+    # Cruce alcista en zona oversold = señal de entrada LONG de calidad
+    if stoch_1h.get("cross_up") and stoch_1h["k"] < 50:
+        long_score += 2
+        total_signals += 1
+        reasons_long.append(f"StochRSI cruce alcista 1h (K={stoch_1h['k']:.0f})")
+    elif stoch_1h.get("cross_dn") and stoch_1h["k"] > 50:
+        short_score += 2
+        total_signals += 1
+        reasons_short.append(f"StochRSI cruce bajista 1h (K={stoch_1h['k']:.0f})")
+
+    if stoch_5m.get("cross_up") and stoch_5m["k"] < 40:
+        long_score += 1
+        total_signals += 1
+        reasons_long.append(f"StochRSI cruce alcista 5m (K={stoch_5m['k']:.0f})")
+    elif stoch_5m.get("cross_dn") and stoch_5m["k"] > 60:
+        short_score += 1
+        total_signals += 1
+        reasons_short.append(f"StochRSI cruce bajista 5m (K={stoch_5m['k']:.0f})")
+
+    # Filtro de sobrecompra/venta extrema en 1h: penalizar señal contraria
+    if stoch_1h.get("overbought") and long_score > short_score:
+        long_score = max(0, long_score - 2)
+    elif stoch_1h.get("oversold") and short_score > long_score:
+        short_score = max(0, short_score - 2)
+
+    # ===== 10. OBV — ACUMULACIÓN / DISTRIBUCIÓN INSTITUCIONAL =====
+    obv_5m = ind.get("obv_5m", {"trend": "NEUTRAL", "divergence": "NONE"})
+    obv_1m = ind.get("obv_1m", {"trend": "NEUTRAL", "divergence": "NONE"})
+
+    # Divergencia OBV en 5m es la más fiable (detecta manos fuertes acumulando/distribuyendo)
+    if obv_5m["divergence"] == "BULL":
+        long_score += 2
+        total_signals += 1
+        reasons_long.append("OBV divergencia alcista 5m (acumulación institucional)")
+    elif obv_5m["divergence"] == "BEAR":
+        short_score += 2
+        total_signals += 1
+        reasons_short.append("OBV divergencia bajista 5m (distribución institucional)")
+
+    # Tendencia OBV en 1m como confirmación ligera
+    if obv_1m["trend"] == "UP":
+        long_score += 1
+        total_signals += 1
+        reasons_long.append("OBV alcista 1m (volumen positivo)")
+    elif obv_1m["trend"] == "DOWN":
+        short_score += 1
+        total_signals += 1
+        reasons_short.append("OBV bajista 1m (volumen negativo)")
+
+    # ===== 11. SOPORTE Y RESISTENCIA EN 1H =====
+    sr = ind.get("sr_1h", {"near_support": False, "near_resistance": False,
+                             "nearest_support": 0, "nearest_resistance": 0,
+                             "dist_to_support_pct": 1.0, "dist_to_resistance_pct": 1.0})
+
+    if sr.get("near_support"):
+        long_score += 1
+        total_signals += 1
+        reasons_long.append(
+            f"Precio cerca soporte ${sr['nearest_support']:,.0f} "
+            f"(-{sr['dist_to_support_pct']:.2f}%)"
+        )
+    elif sr.get("near_resistance"):
+        short_score += 1
+        total_signals += 1
+        reasons_short.append(
+            f"Precio cerca resistencia ${sr['nearest_resistance']:,.0f} "
+            f"(+{sr['dist_to_resistance_pct']:.2f}%)"
+        )
+
     # ===== DECISIÓN FINAL =====
     if total_signals == 0:
         return None
@@ -405,6 +518,24 @@ def evaluate(symbol: str, ind: dict) -> dict | None:
             "fee_per_grid": fee_per_grid,
             "net_per_grid": net_per_grid,
             "liq_price": liq_price,
+        },
+        # Contexto macro para dashboard y Telegram
+        "context": {
+            "trend_1h":          trend_1h,
+            "ema50":             ema_ext.get("ema50", 0),
+            "ema200":            ema_ext.get("ema200", 0),
+            "golden_cross":      ema_ext.get("golden_cross", False),
+            "death_cross":       ema_ext.get("death_cross", False),
+            "stoch_k_1h":        stoch_1h.get("k", 50),
+            "stoch_d_1h":        stoch_1h.get("d", 50),
+            "stoch_overbought":  stoch_1h.get("overbought", False),
+            "stoch_oversold":    stoch_1h.get("oversold", False),
+            "obv_trend":         obv_5m.get("trend", "NEUTRAL"),
+            "obv_divergence":    obv_5m.get("divergence", "NONE"),
+            "nearest_support":   sr.get("nearest_support", 0),
+            "nearest_resistance": sr.get("nearest_resistance", 0),
+            "dist_to_support_pct":   sr.get("dist_to_support_pct", 0),
+            "dist_to_resistance_pct": sr.get("dist_to_resistance_pct", 0),
         },
     }
 

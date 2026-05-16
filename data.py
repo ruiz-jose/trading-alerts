@@ -8,7 +8,7 @@ import pandas as pd
 log = logging.getLogger(__name__)
 
 SYMBOLS = ["BTC/USDT", "ETH/USDT", "SOL/USDT"]
-TIMEFRAMES = ["1m", "5m", "15m"]
+TIMEFRAMES = ["1m", "5m", "15m", "1h"]
 LIMIT = 100
 
 exchange = ccxt.kraken({"enableRateLimit": True})
@@ -19,7 +19,17 @@ _CACHE_TTL = {
     "1m":  10,    # refrescar cada 10s
     "5m":  30,    # cada 30s
     "15m": 60,    # cada 60s
+    "1h":  120,   # cada 2 min (vela horaria casi no cambia en minutos)
     "1w":  3600,  # cada hora (vela semanal casi no cambia)
+}
+
+# Velas a pedir por timeframe: 1h necesita 220+ para que EMA 200 tenga historia suficiente
+_TF_LIMIT = {
+    "1m":  100,
+    "5m":  100,
+    "15m": 100,
+    "1h":  220,
+    "1w":  60,
 }
 
 
@@ -42,8 +52,10 @@ def _retry(max_attempts: int = 3, base_delay: float = 2.0):
 
 
 @_retry(max_attempts=3)
-def fetch_ohlcv(symbol: str, timeframe: str = "1m", limit: int = LIMIT) -> pd.DataFrame:
+def fetch_ohlcv(symbol: str, timeframe: str = "1m", limit: int | None = None) -> pd.DataFrame:
     """Obtiene velas OHLCV de Kraken con caché por timeframe."""
+    if limit is None:
+        limit = _TF_LIMIT.get(timeframe, LIMIT)
     now = time.time()
     key = f"{symbol}_{timeframe}"
     ttl = _CACHE_TTL.get(timeframe, 30)

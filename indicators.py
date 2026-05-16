@@ -304,69 +304,273 @@ def _ema_trend(df: pd.DataFrame) -> dict:
     }
 
 
+def _ema_extended(df: pd.DataFrame) -> dict:
+    """EMA 50 y 200 en 1h — detecta golden/death cross y bias macro.
+
+    Zonas:
+        STRONG_BULL  — precio sobre EMA50 Y EMA200
+        RECOVERING   — precio sobre EMA50, bajo EMA200
+        WEAKENING    — precio bajo EMA50, sobre EMA200
+        STRONG_BEAR  — precio bajo EMA50 Y EMA200
+    """
+    _EMPTY = {
+        "ema50": 0, "ema200": 0,
+        "above_50": False, "above_200": False,
+        "golden_cross": False, "death_cross": False,
+        "trend": "NEUTRAL",
+    }
+    ema50 = ta.ema(df["close"], length=50)
+    ema200 = ta.ema(df["close"], length=200)
+    if ema50 is None or ema200 is None:
+        return _EMPTY
+
+    e50_clean = ema50.dropna()
+    e200_clean = ema200.dropna()
+    if len(e50_clean) < 2:
+        return _EMPTY
+
+    price = df["close"].iloc[-1]
+    e50_curr = float(e50_clean.iloc[-1])
+    e50_prev = float(e50_clean.iloc[-2])
+
+    has_200 = len(e200_clean) >= 2
+    e200_curr = float(e200_clean.iloc[-1]) if has_200 else 0.0
+    e200_prev = float(e200_clean.iloc[-2]) if has_200 else 0.0
+
+    golden_cross = has_200 and (e50_prev <= e200_prev) and (e50_curr > e200_curr)
+    death_cross  = has_200 and (e50_prev >= e200_prev) and (e50_curr < e200_curr)
+
+    above_50  = price > e50_curr
+    above_200 = has_200 and (price > e200_curr)
+
+    if above_50 and above_200:
+        trend = "STRONG_BULL"
+    elif above_50 and not above_200:
+        trend = "RECOVERING"
+    elif not above_50 and above_200:
+        trend = "WEAKENING"
+    else:
+        trend = "STRONG_BEAR"
+
+    return {
+        "ema50": e50_curr,
+        "ema200": e200_curr,
+        "above_50": above_50,
+        "above_200": above_200,
+        "golden_cross": golden_cross,
+        "death_cross": death_cross,
+        "trend": trend,
+    }
+
+
+def _stoch_rsi(df: pd.DataFrame) -> dict:
+    """Stochastic RSI — más sensible que RSI para entradas precisas.
+
+    K cruza D desde abajo en zona oversold → señal alcista fuerte.
+    K cruza D desde arriba en zona overbought → señal bajista fuerte.
+    """
+    _EMPTY = {"k": 50, "d": 50, "overbought": False, "oversold": False,
+              "cross_up": False, "cross_dn": False}
+    stoch = ta.stochrsi(df["close"], length=14, rsi_length=14, k=3, d=3)
+    if stoch is None or stoch.empty:
+        return _EMPTY
+
+    k_cols = [c for c in stoch.columns if "STOCHRSIk" in c]
+    d_cols = [c for c in stoch.columns if "STOCHRSId" in c]
+    if not k_cols or not d_cols:
+        return _EMPTY
+
+    k_series = stoch[k_cols[0]].dropna()
+    d_series = stoch[d_cols[0]].dropna()
+    if len(k_series) < 2 or len(d_series) < 2:
+        return _EMPTY
+
+    k_curr, k_prev = float(k_series.iloc[-1]), float(k_series.iloc[-2])
+    d_curr, d_prev = float(d_series.iloc[-1]), float(d_series.iloc[-2])
+
+    cross_up = (k_prev <= d_prev) and (k_curr > d_curr)
+    cross_dn = (k_prev >= d_prev) and (k_curr < d_curr)
+
+    return {
+        "k": k_curr,
+        "d": d_curr,
+        "overbought": k_curr > 80,
+        "oversold": k_curr < 20,
+        "cross_up": cross_up,
+        "cross_dn": cross_dn,
+    }
+
+
+def _obv_trend(df: pd.DataFrame) -> dict:
+    """On-Balance Volume — detecta acumulación/distribución institucional.
+
+    Divergencia alcista: OBV sube mientras el precio baja → acumulación silenciosa.
+    Divergencia bajista: OBV baja mientras el precio sube → distribución silenciosa.
+    """
+    obv = ta.obv(df["close"], df["volume"])
+    if obv is None or len(obv.dropna()) < 15:
+        return {"trend": "NEUTRAL", "divergence": "NONE", "obv_slope": 0.0}
+
+    obv_vals   = obv.dropna().tail(10).values.astype(float)
+    price_vals = df["close"].tail(10).values.astype(float)
+    if len(obv_vals) < 5:
+        return {"trend": "NEUTRAL", "divergence": "NONE", "obv_slope": 0.0}
+
+    # Pendiente normalizada (evita divisiones por 0)
+    obv_ref   = abs(obv_vals[0]) + 1.0
+    obv_slope = (obv_vals[-1] - obv_vals[0]) / obv_ref
+
+    price_slope = (price_vals[-1] - price_vals[0]) / (price_vals[0] + 1e-9)
+
+    bull_div = obv_slope > 0.01  and price_slope < -0.001
+    bear_div = obv_slope < -0.01 and price_slope >  0.001
+
+    divergence = "BULL" if bull_div else "BEAR" if bear_div else "NONE"
+    trend      = "UP"   if obv_slope > 0.005 else "DOWN" if obv_slope < -0.005 else "NEUTRAL"
+
+    return {"trend": trend, "divergence": divergence, "obv_slope": obv_slope}
+
+
+def _cluster_levels(levels: list[float], pct_threshold: float = 0.003) -> list[float]:
+    """Agrupa niveles de precio que están dentro de pct_threshold entre sí."""
+    if not levels:
+        return []
+    sorted_lvls = sorted(levels)
+    clusters: list[list[float]] = [[sorted_lvls[0]]]
+    for lvl in sorted_lvls[1:]:
+        ref = clusters[-1][-1]
+        if ref > 0 and (lvl / ref - 1) < pct_threshold:
+            clusters[-1].append(lvl)
+        else:
+            clusters.append([lvl])
+    return [sum(c) / len(c) for c in clusters]
+
+
+def _support_resistance(df: pd.DataFrame, window: int = 5, n_levels: int = 3) -> dict:
+    """Soporte y resistencia por pivots locales en las últimas 80 velas.
+
+    Un pivot high es el máximo en una ventana de ±window velas.
+    Un pivot low  es el mínimo en una ventana de ±window velas.
+    Los niveles se agrupan (clustering) para evitar duplicados cercanos.
+    """
+    highs = df["high"].values.astype(float)
+    lows  = df["low"].values.astype(float)
+    close = float(df["close"].iloc[-1])
+
+    n_candles = min(80, len(highs))
+    offset    = len(highs) - n_candles
+    raw_res, raw_sup = [], []
+
+    for i in range(window, n_candles - window):
+        idx = offset + i
+        window_h = highs[idx - window: idx + window + 1]
+        window_l = lows[idx  - window: idx + window + 1]
+        if highs[idx] == np.max(window_h):
+            raw_res.append(highs[idx])
+        if lows[idx] == np.min(window_l):
+            raw_sup.append(lows[idx])
+
+    # Agrupar niveles cercanos y ordenar por proximidad al precio
+    resistances = sorted(_cluster_levels([r for r in raw_res if r > close]))[:n_levels]
+    supports    = sorted(_cluster_levels([s for s in raw_sup if s < close]), reverse=True)[:n_levels]
+
+    nearest_res = resistances[0] if resistances else close * 1.02
+    nearest_sup = supports[0]    if supports    else close * 0.98
+
+    dist_to_res_pct = (nearest_res - close) / close * 100
+    dist_to_sup_pct = (close - nearest_sup)  / close * 100
+
+    return {
+        "supports":              supports,
+        "resistances":           resistances,
+        "nearest_support":       nearest_sup,
+        "nearest_resistance":    nearest_res,
+        "dist_to_support_pct":  dist_to_sup_pct,
+        "dist_to_resistance_pct": dist_to_res_pct,
+        "near_support":     dist_to_sup_pct < 0.4,   # dentro del 0.4% del soporte
+        "near_resistance":  dist_to_res_pct < 0.4,   # dentro del 0.4% de la resistencia
+    }
+
+
 def compute(frames: dict[str, pd.DataFrame], live_price: float) -> dict:
     """Analiza múltiples timeframes y detecta patrones PRE-BREAKOUT.
 
-    frames: {"1m": df, "5m": df, "15m": df}
-    Retorna un dict con todos los indicadores predictivos.
+    frames: {"1m": df, "5m": df, "15m": df, "1h": df}
+    Retorna un dict con todos los indicadores predictivos + contexto macro.
     """
-    df_1m = frames["1m"].copy()
-    df_5m = frames["5m"].copy()
+    df_1m  = frames["1m"].copy()
+    df_5m  = frames["5m"].copy()
     df_15m = frames["15m"].copy()
+    df_1h  = frames.get("1h", df_15m).copy()
 
     # Inyectar precio en vivo en la última vela de 1m
     df_1m.iloc[-1, df_1m.columns.get_loc("close")] = live_price
 
     # --- Indicadores predictivos en 1m (reacción rápida) ---
-    squeeze_1m = _bollinger_squeeze(df_1m)
-    rsi_div_1m = _rsi_divergence(df_1m)
+    squeeze_1m   = _bollinger_squeeze(df_1m)
+    rsi_div_1m   = _rsi_divergence(df_1m)
     vol_spike_1m = _volume_spike(df_1m)
-    macd_pre_1m = _macd_pre_cross(df_1m)
-    ema_1m = _ema_trend(df_1m)
+    macd_pre_1m  = _macd_pre_cross(df_1m)
+    ema_1m       = _ema_trend(df_1m)
 
     # --- Confirmación en 5m (tendencia intermedia) ---
-    squeeze_5m = _bollinger_squeeze(df_5m)
-    rsi_div_5m = _rsi_divergence(df_5m)
+    squeeze_5m   = _bollinger_squeeze(df_5m)
+    rsi_div_5m   = _rsi_divergence(df_5m)
     vol_spike_5m = _volume_spike(df_5m)
-    ema_5m = _ema_trend(df_5m)
-    macd_pre_5m = _macd_pre_cross(df_5m)
+    ema_5m       = _ema_trend(df_5m)
+    macd_pre_5m  = _macd_pre_cross(df_5m)
 
     # --- Contexto en 15m (tendencia macro) ---
-    ema_15m = _ema_trend(df_15m)
-    squeeze_15m = _bollinger_squeeze(df_15m)
+    ema_15m      = _ema_trend(df_15m)
+    squeeze_15m  = _bollinger_squeeze(df_15m)
     vol_spike_15m = _volume_spike(df_15m)
 
     # --- Movimiento brusco predictivo ---
-    cascade_1m = _momentum_cascade(df_1m)
-    cascade_5m = _momentum_cascade(df_5m)
+    cascade_1m    = _momentum_cascade(df_1m)
+    cascade_5m    = _momentum_cascade(df_5m)
     vol_expand_1m = _volatility_expansion(df_1m)
     vol_expand_5m = _volatility_expansion(df_5m)
+
+    # --- Indicadores profesionales en 1h (bias macro + filtros de calidad) ---
+    ema_ext_1h   = _ema_extended(df_1h)        # EMA 50/200 golden/death cross
+    stoch_rsi_1h = _stoch_rsi(df_1h)           # StochRSI sobrecompra/venta 1h
+    stoch_rsi_5m = _stoch_rsi(df_5m)           # StochRSI entradas intraday
+    obv_1m       = _obv_trend(df_1m)           # OBV acumulación/distribución 1m
+    obv_5m       = _obv_trend(df_5m)           # OBV acumulación/distribución 5m
+    sr_1h        = _support_resistance(df_1h)  # Soporte/Resistencia en 1h
 
     return {
         "price": live_price,
         # 1m
-        "squeeze_1m": squeeze_1m,
-        "rsi_div_1m": rsi_div_1m,
+        "squeeze_1m":   squeeze_1m,
+        "rsi_div_1m":   rsi_div_1m,
         "vol_spike_1m": vol_spike_1m,
-        "macd_pre_1m": macd_pre_1m,
-        "ema_1m": ema_1m,
+        "macd_pre_1m":  macd_pre_1m,
+        "ema_1m":       ema_1m,
+        "obv_1m":       obv_1m,
         # 5m
-        "squeeze_5m": squeeze_5m,
-        "rsi_div_5m": rsi_div_5m,
-        "vol_spike_5m": vol_spike_5m,
-        "ema_5m": ema_5m,
-        "macd_pre_5m": macd_pre_5m,
+        "squeeze_5m":    squeeze_5m,
+        "rsi_div_5m":    rsi_div_5m,
+        "vol_spike_5m":  vol_spike_5m,
+        "ema_5m":        ema_5m,
+        "macd_pre_5m":   macd_pre_5m,
+        "obv_5m":        obv_5m,
+        "stoch_rsi_5m":  stoch_rsi_5m,
         # 15m
-        "ema_15m": ema_15m,
-        "squeeze_15m": squeeze_15m,
+        "ema_15m":       ema_15m,
+        "squeeze_15m":   squeeze_15m,
         "vol_spike_15m": vol_spike_15m,
         # ATR de 15m para estimar movimiento real
         "atr_15m": vol_spike_15m["atr"],
         # Predictivos: cascada de momentum + expansión de volatilidad
-        "cascade_1m": cascade_1m,
-        "cascade_5m": cascade_5m,
+        "cascade_1m":    cascade_1m,
+        "cascade_5m":    cascade_5m,
         "vol_expand_1m": vol_expand_1m,
         "vol_expand_5m": vol_expand_5m,
+        # 1h — contexto macro profesional
+        "ema_ext_1h":   ema_ext_1h,
+        "stoch_rsi_1h": stoch_rsi_1h,
+        "sr_1h":        sr_1h,
     }
 
 

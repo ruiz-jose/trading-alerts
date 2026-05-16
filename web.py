@@ -150,7 +150,7 @@ def start(port: int | None = None, open_browser: bool = True) -> None:
         def _open():
             import time
             time.sleep(1.5)  # esperar a que Flask arranque
-            webbrowser.open(f"http://127.0.0.1:{port}")
+            webbrowser.open(f"http://127.0.0.1:{_port}")
         threading.Thread(target=_open, daemon=True, name="browser-open").start()
 
 
@@ -256,6 +256,21 @@ main{max-width:860px;margin:0 auto;padding:18px 14px}
 /* ZONE ARROW */
 .zone-row{display:flex;align-items:center;gap:8px;margin-bottom:10px;font-size:12px;color:#8b949e}
 .zone-pill{background:#21262d;border-radius:4px;padding:3px 9px;font-weight:600;font-size:11px;font-family:monospace}
+
+/* CONTEXT 1H */
+.ctx-box{background:#21262d;border-radius:6px;padding:9px 12px;margin-bottom:10px;font-size:12px}
+.ctx-row{display:flex;justify-content:space-between;align-items:center;padding:2px 0;color:#8b949e}
+.ctx-row span:last-child{color:#e6edf3;font-family:monospace;text-align:right;max-width:60%}
+.ctx-trend-STRONG_BULL{color:#3fb950!important}
+.ctx-trend-RECOVERING{color:#56d364!important}
+.ctx-trend-WEAKENING{color:#d29922!important}
+.ctx-trend-STRONG_BEAR{color:#f85149!important}
+.ctx-trend-NEUTRAL{color:#8b949e!important}
+.ctx-cross-golden{color:#f0c000;font-weight:700}
+.ctx-cross-death{color:#f85149;font-weight:700}
+.sr-bar{display:flex;align-items:center;gap:4px;margin:6px 0;font-size:11px;color:#6e7681}
+.sr-line{flex:1;height:3px;background:#30363d;border-radius:2px;position:relative;overflow:visible}
+.sr-price-dot{position:absolute;width:8px;height:8px;background:#58a6ff;border-radius:50%;top:-2.5px;transform:translateX(-50%)}
 
 /* SCROLLBAR */
 ::-webkit-scrollbar{width:5px;height:5px}
@@ -387,6 +402,39 @@ function addAlert(sig) {
 }
 
 function buildBMSB(sig, dir) {
+  const prev = sig.prev_zone;
+  const isFirst = !prev || prev === 'UNKNOWN' || prev === '?';
+
+  // Línea de transición de zona
+  let zoneHtml;
+  if (isFirst) {
+    zoneHtml =
+      '<div class="zone-row" style="font-style:italic;color:#6e7681">' +
+        'Primera detección desde que arrancó el bot' +
+      '</div>';
+  } else {
+    zoneHtml =
+      '<div class="zone-row">' +
+        '<span style="color:#6e7681">Cambio de zona</span>' +
+        '<span class="zone-pill">' + prev + '</span>' +
+        '<span style="color:#6e7681">→</span>' +
+        '<span class="zone-pill" style="font-weight:700">' + sig.direction + '</span>' +
+      '</div>';
+  }
+
+  // Texto descriptivo según dirección
+  const descTxt = dir === 'bull'
+    ? 'El precio superó ambas bandas semanales. Mercado macro alcista.'
+    : 'El precio cayó bajo ambas bandas semanales. Precaución: mercado macro bajista.';
+
+  // Distancia al precio con signo y color
+  function bandDist(pctVal) {
+    const n = Number(pctVal);
+    const sign = n >= 0 ? '+' : '';
+    const col  = n >= 0 ? '#3fb950' : '#f85149';
+    return '<span style="color:' + col + ';font-size:11px">' + sign + n.toFixed(1) + '% vs precio</span>';
+  }
+
   return (
     '<div class="card-head">' +
       '<div class="card-title">' +
@@ -397,27 +445,77 @@ function buildBMSB(sig, dir) {
       '<span class="card-time">' + nowStr() + '</span>' +
     '</div>' +
     '<div class="card-body">' +
-      '<div class="zone-row">' +
-        'Zona anterior' +
-        '<span class="zone-pill">' + (sig.prev_zone || '?') + '</span>' +
-        '→' +
-        '<span class="zone-pill">' + sig.direction + '</span>' +
-      '</div>' +
-      '<div class="pills">' +
-        '<div class="pill"><b>Precio</b>' + fmt(sig.price) + '</div>' +
+      '<p style="font-size:12px;color:#8b949e;margin-bottom:10px">' + descTxt + '</p>' +
+      zoneHtml +
+      '<div class="pills" style="margin-bottom:10px">' +
+        '<div class="pill"><b>Precio actual</b>' + fmt(sig.price) + '</div>' +
       '</div>' +
       '<div class="bands">' +
         '<div class="band">' +
-          '<div class="band-lbl">SMA 20W</div>' +
+          '<div class="band-lbl">SMA 20 semanas</div>' +
           '<div class="band-val">' + fmt(sig.sma20) + '</div>' +
-          '<div class="band-dist">' + pct(sig.dist_sma20_pct) + ' vs precio</div>' +
+          '<div class="band-dist">' + bandDist(sig.dist_sma20_pct) + '</div>' +
         '</div>' +
         '<div class="band">' +
-          '<div class="band-lbl">EMA 21W</div>' +
+          '<div class="band-lbl">EMA 21 semanas</div>' +
           '<div class="band-val">' + fmt(sig.ema21) + '</div>' +
-          '<div class="band-dist">' + pct(sig.dist_ema21_pct) + ' vs precio</div>' +
+          '<div class="band-dist">' + bandDist(sig.dist_ema21_pct) + '</div>' +
         '</div>' +
       '</div>' +
+    '</div>'
+  );
+}
+
+function buildContext(ctx) {
+  if (!ctx) return '';
+  const trendLabel = {
+    'STRONG_BULL': 'Alcista fuerte',
+    'RECOVERING':  'Recuperando',
+    'WEAKENING':   'Debilitándose',
+    'STRONG_BEAR': 'Bajista fuerte',
+    'NEUTRAL':     'Neutral',
+  };
+  const trend = ctx.trend_1h || 'NEUTRAL';
+  const trendTxt = trendLabel[trend] || trend;
+
+  const stochFlag = ctx.stoch_overbought ? ' ⚠ sobrecompra'
+                  : ctx.stoch_oversold   ? ' ⚠ sobreventa'
+                  : '';
+  const obvMap = { UP: 'alcista', DOWN: 'bajista', NEUTRAL: 'neutral' };
+  const divMap = { BULL: 'divergencia alcista', BEAR: 'divergencia bajista', NONE: '' };
+  const obvTxt = (obvMap[ctx.obv_trend] || 'neutral') +
+                 (divMap[ctx.obv_divergence] ? ' · ' + divMap[ctx.obv_divergence] : '');
+
+  let crossHtml = '';
+  if (ctx.golden_cross) crossHtml = '<div class="ctx-row"><span>Cruce</span><span class="ctx-cross-golden">🏆 Golden Cross EMA50/200</span></div>';
+  else if (ctx.death_cross) crossHtml = '<div class="ctx-row"><span>Cruce</span><span class="ctx-cross-death">💀 Death Cross EMA50/200</span></div>';
+
+  let srHtml = '';
+  if (ctx.nearest_support && ctx.nearest_resistance) {
+    srHtml =
+      '<div class="ctx-row"><span>Soporte 1H</span><span>' +
+        fmt(ctx.nearest_support, 0) + ' (' + Number(ctx.dist_to_support_pct).toFixed(2) + '% abajo)</span></div>' +
+      '<div class="ctx-row"><span>Resistencia 1H</span><span>' +
+        fmt(ctx.nearest_resistance, 0) + ' (' + Number(ctx.dist_to_resistance_pct).toFixed(2) + '% arriba)</span></div>';
+  }
+
+  let emaHtml = '';
+  if (ctx.ema50) {
+    emaHtml = '<div class="ctx-row"><span>EMA50/200 1H</span><span>' +
+      fmt(ctx.ema50, 0) + (ctx.ema200 ? ' / ' + fmt(ctx.ema200, 0) : '') + '</span></div>';
+  }
+
+  return (
+    '<div class="ctx-box">' +
+      '<div class="ctx-row"><span>Tendencia 1H</span>' +
+        '<span class="ctx-trend-' + trend + '">' + trendTxt + '</span></div>' +
+      '<div class="ctx-row"><span>StochRSI 1H</span>' +
+        '<span>K=' + Number(ctx.stoch_k_1h||50).toFixed(0) +
+              ' D=' + Number(ctx.stoch_d_1h||50).toFixed(0) + stochFlag + '</span></div>' +
+      '<div class="ctx-row"><span>OBV 5m</span><span>' + obvTxt + '</span></div>' +
+      crossHtml +
+      emaHtml +
+      srHtml +
     '</div>'
   );
 }
@@ -425,6 +523,7 @@ function buildBMSB(sig, dir) {
 function buildFutures(sig, dir) {
   const t = sig.trade || {};
   const g = sig.grid  || {};
+  const ctx = sig.context || null;
   const pnl = (t.expected_pnl || 0).toLocaleString('en-US', { maximumFractionDigits: 0 });
 
   let gridHtml = '';
@@ -463,6 +562,7 @@ function buildFutures(sig, dir) {
         '<div class="lvl"><div class="lvl-lbl">Target</div><div class="lvl-val t">'  + fmt(t.target) + '</div></div>' +
         '<div class="lvl"><div class="lvl-lbl">Stop</div><div class="lvl-val s">'    + fmt(t.stop)   + '</div></div>' +
       '</div>' +
+      buildContext(ctx) +
       gridHtml +
       '<div class="reasons">' + reasons + '</div>' +
     '</div>'
