@@ -11,9 +11,9 @@ SYMBOLS = ["BTC/USDT", "ETH/USDT", "SOL/USDT"]
 TIMEFRAMES = ["1m", "5m", "15m"]
 LIMIT = 100
 
-exchange = ccxt.binance({"enableRateLimit": True})
+exchange = ccxt.bybit({"enableRateLimit": True})
 
-# Caché de velas OHLCV para no saturar la API de Binance
+# Caché de velas OHLCV para no saturar la API de Bybit
 _cache: dict = {}
 _CACHE_TTL = {
     "1m":  10,    # refrescar cada 10s
@@ -43,7 +43,7 @@ def _retry(max_attempts: int = 3, base_delay: float = 2.0):
 
 @_retry(max_attempts=3)
 def fetch_ohlcv(symbol: str, timeframe: str = "1m", limit: int = LIMIT) -> pd.DataFrame:
-    """Obtiene velas OHLCV de Binance con caché por timeframe."""
+    """Obtiene velas OHLCV de Bybit con caché por timeframe."""
     now = time.time()
     key = f"{symbol}_{timeframe}"
     ttl = _CACHE_TTL.get(timeframe, 30)
