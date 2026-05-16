@@ -1,11 +1,11 @@
-# Trading Day Bot — Predicción Pre-Breakout para Futuros
+# Trading alert — Predicción Pre-Breakout para Futuros
 
 Bot de alertas técnicas para **BTC/USDT**, **ETH/USDT** y **SOL/USDT** que opera en dos capas:
 
-| Capa | Timeframe | Propósito |
-|---|---|---|
-| **Pre-breakout (futuros)** | 1m / 5m / 15m | Detectar movimientos inminentes para operar LONG/SHORT |
-| **Bull Market Support Band** | Semanal (1W) | Contexto macro: ¿estamos en bull o bear market? |
+| Capa                         | Timeframe     | Propósito                                              |
+| ---------------------------- | ------------- | ------------------------------------------------------ |
+| **Pre-breakout (futuros)**   | 1m / 5m / 15m | Detectar movimientos inminentes para operar LONG/SHORT |
+| **Bull Market Support Band** | Semanal (1W)  | Contexto macro: ¿estamos en bull o bear market?        |
 
 Las alertas se envían por **Telegram** con precio, niveles de entrada/target/stop y configuración de Grid Bot.
 
@@ -15,17 +15,18 @@ Las alertas se envían por **Telegram** con precio, niveles de entrada/target/st
 
 ### Capa intradía (futuros)
 
-| Indicador | Qué detecta | Timeframes |
-|---|---|---|
-| **Bollinger Squeeze** | Volatilidad comprimida → breakout inminente | 1m, 5m, 15m |
-| **Divergencia RSI** | Discrepancia precio/momentum → reversión | 1m, 5m |
-| **Pico de volumen** | Volumen anómalo sin movimiento → acumulación/distribución | 1m |
-| **MACD pre-cruce** | Histograma convergiendo a 0 → cruce inminente | 1m, 5m |
-| **EMA 9/21 multi-TF** | Confirmación de tendencia alineada | 1m, 5m, 15m |
-| **Cascada de momentum** | 3+ velas consecutivas acelerando | 1m, 5m |
-| **Expansión de volatilidad** | ATR reciente > ATR histórico × 1.5 | 1m, 5m |
+| Indicador                    | Qué detecta                                               | Timeframes  |
+| ---------------------------- | --------------------------------------------------------- | ----------- |
+| **Bollinger Squeeze**        | Volatilidad comprimida → breakout inminente               | 1m, 5m, 15m |
+| **Divergencia RSI**          | Discrepancia precio/momentum → reversión                  | 1m, 5m      |
+| **Pico de volumen**          | Volumen anómalo sin movimiento → acumulación/distribución | 1m          |
+| **MACD pre-cruce**           | Histograma convergiendo a 0 → cruce inminente             | 1m, 5m      |
+| **EMA 9/21 multi-TF**        | Confirmación de tendencia alineada                        | 1m, 5m, 15m |
+| **Cascada de momentum**      | 3+ velas consecutivas acelerando                          | 1m, 5m      |
+| **Expansión de volatilidad** | ATR reciente > ATR histórico × 1.5                        | 1m, 5m      |
 
 Las señales se combinan con **puntuación ponderada**. Solo alerta si:
+
 - Confianza ≥ 60 %
 - Movimiento esperado ≥ 0.3 %
 - Cooldown de 5 minutos por par + dirección
@@ -38,11 +39,11 @@ Compara el precio con dos medias en timeframe semanal:
 SMA 20 semanas  +  EMA 21 semanas
 ```
 
-| Zona | Condición | Alerta |
-|---|---|---|
-| **BULL** | Precio por encima de ambas bandas | Solo al cruzar desde abajo ✅ |
-| **BEAR** | Precio por debajo de ambas bandas | Solo al cruzar desde arriba ⚠️ |
-| **NEUTRAL** | Precio entre las dos bandas | Sin alerta |
+| Zona        | Condición                         | Alerta                         |
+| ----------- | --------------------------------- | ------------------------------ |
+| **BULL**    | Precio por encima de ambas bandas | Solo al cruzar desde abajo ✅  |
+| **BEAR**    | Precio por debajo de ambas bandas | Solo al cruzar desde arriba ⚠️ |
+| **NEUTRAL** | Precio entre las dos bandas       | Sin alerta                     |
 
 - Usa la última vela semanal **cerrada** para evitar señales falsas de la vela en curso.
 - Cooldown de **7 días** por par + dirección.
@@ -82,14 +83,14 @@ TELEGRAM_CHAT_ID=987654321
 
 ### Parámetros configurables (signals.py)
 
-| Variable | Por defecto | Descripción |
-|---|---|---|
-| `TRADE_AMOUNT` | `2000` USDT | Capital por operación |
-| `LEVERAGE` | `15x` | Apalancamiento |
-| `COOLDOWN_SECONDS` | `300` | Tiempo mínimo entre alertas del mismo par |
-| `MIN_MOVE_PCT` | `0.3 %` | Movimiento mínimo esperado para alertar |
-| `MIN_CONFIDENCE` | `60 %` | Confianza mínima para alertar |
-| `BMSB_COOLDOWN_DAYS` | `7` | Días de cooldown entre alertas BMSB |
+| Variable             | Por defecto | Descripción                               |
+| -------------------- | ----------- | ----------------------------------------- |
+| `TRADE_AMOUNT`       | `2000` USDT | Capital por operación                     |
+| `LEVERAGE`           | `15x`       | Apalancamiento                            |
+| `COOLDOWN_SECONDS`   | `300`       | Tiempo mínimo entre alertas del mismo par |
+| `MIN_MOVE_PCT`       | `0.3 %`     | Movimiento mínimo esperado para alertar   |
+| `MIN_CONFIDENCE`     | `60 %`      | Confianza mínima para alertar             |
+| `BMSB_COOLDOWN_DAYS` | `7`         | Días de cooldown entre alertas BMSB       |
 
 ---
 

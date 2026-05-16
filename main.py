@@ -82,6 +82,12 @@ def run_tick() -> None:
     all_data = data.fetch_all()
     ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
 
+    if not all_data:
+        msg = "fetch_all() devolvió vacío — exchange inaccesible desde este servidor"
+        log.error(msg)
+        web.push_error(msg)
+        return
+
     for symbol, info in all_data.items():
         # Enviar precio en vivo al dashboard
         web.push_scan({"symbol": symbol, "price": info["price"], "ts": ts})

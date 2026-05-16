@@ -16,15 +16,25 @@ import logging
 import os
 import queue
 import threading
+import time
 import webbrowser
 
-from flask import Flask, Response
+from flask import Flask, Response, jsonify
 
 log = logging.getLogger(__name__)
 
 # ── Pub/sub: lista de colas por cliente SSE ───────────────────────────────────
 _clients: list[queue.Queue] = []
 _clients_lock = threading.Lock()
+
+# ── Estado de diagnóstico ─────────────────────────────────────────────────────
+_status: dict = {
+    "last_scan_ts": None,
+    "last_error": None,
+    "last_error_ts": None,
+    "ticks_ok": 0,
+    "ticks_failed": 0,
+}
 
 app = Flask(__name__)
 app.logger.disabled = True  # silenciar el logger de Flask
@@ -50,7 +60,17 @@ def push_alert(signal: dict) -> None:
 
 def push_scan(scan_data: dict) -> None:
     """Empuja un tick de escaneo (precio en vivo) al dashboard."""
+    _status["last_scan_ts"] = time.time()
+    _status["ticks_ok"] += 1
     _broadcast("scan", scan_data)
+
+
+def push_error(message: str) -> None:
+    """Empuja un error al dashboard y lo registra en el estado."""
+    _status["last_error"] = message
+    _status["last_error_ts"] = time.time()
+    _status["ticks_failed"] += 1
+    _broadcast("bot_error", {"message": message})
 
 
 # ── Rutas Flask ───────────────────────────────────────────────────────────────
@@ -63,6 +83,21 @@ def index() -> str:
 @app.route("/health")
 def health() -> Response:
     return Response("ok", status=200, content_type="text/plain")
+
+
+@app.route("/api/status")
+def api_status() -> Response:
+    now = time.time()
+    last_scan_ago = (now - _status["last_scan_ts"]) if _status["last_scan_ts"] else None
+    last_err_ago  = (now - _status["last_error_ts"]) if _status["last_error_ts"] else None
+    return jsonify({
+        "ok": _status["last_scan_ts"] is not None and last_scan_ago < 30,
+        "last_scan_seconds_ago": round(last_scan_ago, 1) if last_scan_ago is not None else None,
+        "last_error": _status["last_error"],
+        "last_error_seconds_ago": round(last_err_ago, 1) if last_err_ago is not None else None,
+        "ticks_ok": _status["ticks_ok"],
+        "ticks_failed": _status["ticks_failed"],
+    })
 
 
 @app.route("/stream")
@@ -241,12 +276,17 @@ main{max-width:860px;margin:0 auto;padding:18px 14px}
 
 <main>
   <div class="empty" id="empty">
-    <svg class="spinner" width="44" height="44" viewBox="0 0 24 24" fill="none"
+    <svg class="spinner" id="spinner" width="44" height="44" viewBox="0 0 24 24" fill="none"
          stroke="#58a6ff" stroke-width="1.5" stroke-linecap="round">
       <path d="M12 2a10 10 0 1 0 10 10" />
     </svg>
-    <h2>Escaneando el mercado...</h2>
-    <p>Las alertas aparecerán aquí cuando se detecte una señal</p>
+    <svg id="error-icon" width="44" height="44" viewBox="0 0 24 24" fill="none"
+         stroke="#f85149" stroke-width="1.5" stroke-linecap="round" style="display:none;margin:0 auto 14px">
+      <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><circle cx="12" cy="16" r=".5" fill="#f85149"/>
+    </svg>
+    <h2 id="empty-title">Escaneando el mercado...</h2>
+    <p id="empty-msg">Las alertas aparecerán aquí cuando se detecte una señal</p>
+    <p id="error-detail" style="margin-top:8px;font-size:11px;color:#f85149;font-family:monospace;max-width:480px;word-break:break-all;display:none"></p>
   </div>
 
   <div id="feed-wrap" style="display:none">
@@ -272,6 +312,19 @@ es.onerror = () => {
 
 es.addEventListener('scan',  e => updateTicker(JSON.parse(e.data)));
 es.addEventListener('alert', e => addAlert(JSON.parse(e.data)));
+es.addEventListener('bot_error', e => showError(JSON.parse(e.data).message));
+
+function showError(msg) {
+  const empty = document.getElementById('empty');
+  if (empty.style.display === 'none') return; // hay alertas, no mostrar
+  document.getElementById('spinner').style.display    = 'none';
+  document.getElementById('error-icon').style.display = 'block';
+  document.getElementById('empty-title').textContent  = 'Error al obtener datos';
+  document.getElementById('empty-msg').textContent    = 'El bot no puede conectar con el exchange. Revisa los logs de Render.';
+  const det = document.getElementById('error-detail');
+  det.style.display   = 'block';
+  det.textContent     = msg;
+}
 
 /* ── Tickers ─────────────────────────────────────────────── */
 function updateTicker({ symbol, price, ts }) {
